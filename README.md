@@ -42,5 +42,5 @@ To support a new player provider, add its oEmbed endpoint to `OEMBED_PROVIDERS` 
 
 - **Internet is needed to create a card** because the data comes from the target page. Once a card is made in self-contained mode, it displays with no network access. (Player embeds always need internet to play.)
 - **Private/intranet addresses are blocked** so a hosted copy can't be used to probe your network. To preview internal links on your own machine, set `LINKCARD_ALLOW_PRIVATE=1` first.
-- Some sites block automated fetches or need a login (e.g. Instagram, LinkedIn, some news paywalls). Those sites return thin or no metadata, which is also true for iframely without its paid provider integrations.
+- Some sites block automated fetches or need a login (e.g. Cloudflare-protected sites like datacamp.com, Instagram, LinkedIn, some news paywalls). Instead of failing, LinkCard builds a basic card from the URL (title from the slug, domain, favicon) and shows a warning. You can fill in the title, description and image under **Edit card details**, or with `--title` / `--description` / `--image` on the command line.
 - Email clients strip `<style>` and iframes, so the embed code is meant for web pages, not email.

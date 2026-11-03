@@ -75,6 +75,7 @@ class LinkMeta:
     player_height: int = 0     # fixed height, for audio and other rich players
     player_html: str = ""      # provider HTML, only for trusted script embeds
     source: str = ""           # which strategies produced the data
+    warning: str = ""          # set when the page could not be read (e.g. bot protection)
 
     @property
     def domain(self) -> str:
@@ -112,6 +113,14 @@ def unfurl(url: str) -> LinkMeta:
     page = None
     try:
         page = _get(url, MAX_PAGE_BYTES, truncate=True)
+    except requests.HTTPError as exc:
+        # The server answered but refused us (403 bot protection, 401 login,
+        # 429 rate limit, ...). Still make a basic card from the URL itself.
+        if not sources:
+            status = exc.response.status_code if exc.response is not None else "?"
+            meta.warning = _blocked_message(status)
+            _fill(meta, "title", _title_from_slug(url))
+            sources.append("url")
     except (requests.RequestException, UnfurlError) as exc:
         if not sources:
             raise UnfurlError(f"Could not fetch {url}: {exc}") from exc
@@ -475,6 +484,29 @@ def _to_int(value) -> int:
         return int(float(str(value).removesuffix("px")))
     except (TypeError, ValueError):
         return 0
+
+
+def _blocked_message(status) -> str:
+    reason = {401: "requires a login", 403: "blocks automated requests (bot protection)",
+              429: "is rate-limiting requests"}.get(status, "refused the request")
+    return (f"The site {reason} (HTTP {status}), so its title, description and image couldn't "
+            "be read. The card was built from the URL instead; fill in the details yourself.")
+
+
+def _title_from_slug(url: str) -> str:
+    """'/blog/best-ai-agents-training' -> 'Best AI Agents Training'."""
+    path = unquote(urlparse(url).path).rstrip("/")
+    slug = re.sub(r"\.(html?|php|aspx?)$", "", path.rsplit("/", 1)[-1], flags=re.I)
+    words = [w for w in re.split(r"[-_+\s]+", slug) if w]
+    if not words or (len(words) == 1 and re.fullmatch(r"[\w]{0,3}|\d+|[0-9a-f]{8,}", words[0], re.I)):
+        return ""  # no readable slug (home page, numeric id, hash)
+    small = {"a", "an", "and", "as", "at", "for", "in", "of", "on", "or", "the", "to", "vs", "with"}
+    acronyms = {"ai", "api", "ui", "ux", "seo", "sql", "aws", "ml", "llm", "llms", "css", "html", "js", "ceo", "faq", "diy", "usa", "uk", "eu"}
+    out = []
+    for i, w in enumerate(words):
+        lw = w.lower()
+        out.append(lw.upper() if lw in acronyms else lw if i and lw in small else w[:1].upper() + w[1:])
+    return " ".join(out)
 
 
 def _filename(url: str) -> str:

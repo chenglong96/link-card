@@ -2,6 +2,7 @@
 
     streamlit run app.py
 """
+import dataclasses
 import json
 import re
 
@@ -20,8 +21,9 @@ def get_meta(url: str) -> LinkMeta:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_offline_meta(url: str) -> LinkMeta:
-    return inline_images(get_meta(url))
+def get_inlined(image: str, favicon: str) -> tuple[str, str]:
+    inlined = inline_images(LinkMeta(url="", image=image, favicon=favicon))
+    return inlined.image, inlined.favicon
 
 
 def preview_height(meta: LinkMeta, size: str, width: int) -> int:
@@ -61,10 +63,38 @@ if not url.strip():
 try:
     with st.spinner("Fetching page…"):
         meta = get_meta(url)
-        card_meta = get_offline_meta(url) if offline else meta
 except UnfurlError as exc:
     st.error(str(exc))
     st.stop()
+
+if meta.warning:
+    st.warning(meta.warning, icon="🛡️")
+
+# Let the user correct or complete anything the page didn't provide (essential
+# for sites that block automated requests). Keys include the URL so the fields
+# reset when a new link is entered.
+with st.expander("✏️ Edit card details", expanded=bool(meta.warning)):
+    if meta.warning:
+        st.caption("Open the link in your browser and copy its title, summary and main image "
+                   "(right-click the image → Copy image address).")
+    k = meta.url
+    c1, c2 = st.columns(2)
+    edits = {
+        "title": c1.text_input("Title", meta.title, key=f"title|{k}"),
+        "site_name": c2.text_input("Site name", meta.site_name, key=f"site|{k}"),
+        "description": st.text_area("Description", meta.description, height=80, key=f"desc|{k}"),
+        "image": c1.text_input("Image URL", meta.image, key=f"image|{k}"),
+        "author": c2.text_input("Author", meta.author, key=f"author|{k}"),
+        "published": c1.text_input("Published (YYYY-MM-DD)", meta.published, key=f"date|{k}"),
+        "favicon": c2.text_input("Icon URL", meta.favicon, key=f"icon|{k}"),
+    }
+meta = dataclasses.replace(meta, **{f: v.strip() for f, v in edits.items()})
+
+card_meta = meta
+if offline:
+    with st.spinner("Embedding images…"):
+        image, favicon = get_inlined(meta.image, meta.favicon)
+    card_meta = dataclasses.replace(meta, image=image, favicon=favicon)
 
 if size == "player" and not meta.has_player:
     st.info("This link has no embeddable player, so it is shown as a large card.")
