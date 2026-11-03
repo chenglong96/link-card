@@ -15,7 +15,7 @@ THEMES = ("light", "dark", "auto")
 DEFAULT_WIDTHS = {"large": 520, "small": 600, "player": 640}
 # Height presets. Large: the whole card (the image is cropped to fit). Small: the
 # card's height (the thumbnail is square). Player: see preset_height().
-DEFAULT_HEIGHTS = {"large": 440, "small": 120}
+DEFAULT_HEIGHTS = {"large": 440, "small": 140}
 HEIGHT_RANGES = {"large": (160, 900), "small": (72, 320), "player": (80, 900)}
 
 _DARK_VARS = ("--lc-bg:#16181c;--lc-fg:#e7e9ea;--lc-muted:#8b98a5;"
@@ -45,10 +45,10 @@ CSS = (
     ".lc-meta img{width:16px;height:16px;border-radius:3px;flex:none}"
     ".lc-meta span{overflow:hidden;text-overflow:ellipsis}"
     ".lc-meta .lc-date{flex:none}"
-    ".lc-small a.lc-link{display:flex;height:var(--lc-h,120px)}"
+    ".lc-small a.lc-link{display:flex;height:var(--lc-h,140px)}"
     ".lc-small .lc-body{flex:1;justify-content:safe center;overflow:hidden}"
     ".lc-small .lc-desc{-webkit-line-clamp:2}"
-    ".lc-thumb{position:relative;flex:none;width:min(40%,var(--lc-h,120px));background:var(--lc-thumb);"
+    ".lc-thumb{position:relative;flex:none;width:min(40%,var(--lc-h,140px));background:var(--lc-thumb);"
     "border-right:1px solid var(--lc-border)}"
     ".lc-player{position:relative;background:var(--lc-thumb)}"
     ".lc-player.lc-ratio{background:#000}"
