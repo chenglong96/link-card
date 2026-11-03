@@ -9,7 +9,8 @@ import re
 import streamlit as st
 import streamlit.components.v1 as components
 
-from cards import DEFAULT_WIDTHS, SIZES, THEMES, render_card, render_page
+from cards import (DEFAULT_WIDTHS, HEIGHT_RANGES, SIZES, THEMES, effective_size, preset_height,
+                   render_card, render_page)
 from unfurl import LinkMeta, UnfurlError, inline_images, unfurl
 
 st.set_page_config(page_title="LinkCard", page_icon="🔗", layout="wide")
@@ -26,16 +27,26 @@ def get_inlined(image: str, favicon: str) -> tuple[str, str]:
     return inlined.image, inlined.favicon
 
 
-def preview_height(meta: LinkMeta, size: str, width: int) -> int:
+def preview_height(meta: LinkMeta, size: str, width: int, height: int) -> int:
     """components.html needs a fixed height; overestimating is harmless."""
-    if size == "player" and meta.has_player:
+    size = effective_size(meta, size)
+    if size == "player":
         if meta.player_html:
             return 760
-        player = width * meta.player_ratio if meta.player_ratio else meta.player_height or 400
-        return int(player) + 110
+        if meta.player_ratio:
+            height = min(width, height / meta.player_ratio) * meta.player_ratio
+        return int(height) + 110
     if size == "small":
-        return 170
-    return int(width / 1.91) + 210 if meta.image else 210
+        return height + 40
+    natural = int(width / 1.91) + 200 if meta.image else 200
+    return min(height, natural) + 40
+
+
+HEIGHT_HELP = {
+    "large": "Height of the whole card. The image is cropped to fit; the text is never cut.",
+    "small": "Height of the card. The thumbnail on the left is square (up to 40% of the width).",
+    "player": "Height of the player. Videos keep their shape, so a lower height makes the card narrower.",
+}
 
 
 with st.sidebar:
@@ -44,6 +55,7 @@ with st.sidebar:
     theme = st.radio("Theme", THEMES, format_func=str.title, horizontal=True,
                      help="Auto follows the viewer's light/dark system setting.")
     width = st.slider("Max width (px)", 280, 900, DEFAULT_WIDTHS[size], step=10)
+    height_slot = st.container()  # filled once the link is known (player presets depend on it)
     show_date = st.checkbox("Show published date", value=True)
     offline = st.toggle("Self-contained (embed images)",
                         help="Downloads the preview image and icon into the card as data URIs, so the "
@@ -99,7 +111,20 @@ if offline:
 if size == "player" and not meta.has_player:
     st.info("This link has no embeddable player, so it is shown as a large card.")
 
-card = render_card(card_meta, size, theme, width, show_date)
+shape = effective_size(meta, size)
+if shape == "player" and meta.player_html:
+    height = 0
+    height_slot.caption("Height: set by the provider for X / TikTok / Reddit embeds.")
+else:
+    lo, hi = HEIGHT_RANGES[shape]
+    preset = min(max(preset_height(meta, shape), lo), hi)
+    # Large/small presets are fixed; the player preset is the provider's own size,
+    # so that slider is keyed per link and resets for a new one.
+    key = f"height|{shape}" + (f"|{meta.url}" if shape == "player" else "")
+    height = height_slot.slider("Max height (px)", lo, hi, preset, step=4, key=key,
+                                help=HEIGHT_HELP[shape] + f" Preset: {preset}px.")
+
+card = render_card(card_meta, size, theme, width, show_date, height or None)
 page = render_page(card, theme, meta.title)
 slug = re.sub(r"[^a-z0-9]+", "-", meta.title.lower()).strip("-")[:60] or "card"
 
@@ -108,7 +133,7 @@ with preview_col:
     st.subheader("Preview")
     if show_date and not meta.published:
         st.caption("No published date found on this page.")
-    components.html(page, height=preview_height(meta, size, width), scrolling=True)
+    components.html(page, height=preview_height(meta, size, width, height), scrolling=True)
 with code_col:
     st.subheader("Embed code")
     st.caption("Paste this into any web page or CMS that accepts HTML.")

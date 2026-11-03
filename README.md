@@ -2,7 +2,8 @@
 
 A self-hosted take on iframely: paste a URL and get an embeddable preview card.
 
-- **Sizes:** large (image on top), small (thumbnail on the side), player (playable YouTube / Vimeo / Spotify / SoundCloud / X / TikTok / Reddit embed)
+- **Sizes:** large (image on top), small (square thumbnail on the left), player (playable YouTube / Vimeo / Spotify / SoundCloud / X / TikTok / Reddit embed)
+- **Adjustable width and height**, with presets per size: large 520 × 440, small 600 × 120, player 640 wide × the provider's own height (360 for a 16:9 video, 352 for Spotify)
 - **Published date** shown in the footer (from article / video / paper meta tags, JSON-LD, or the tweet), e.g. `GitHub · 5 Mar 2024`
 - **Themes:** light, dark, auto (follows the viewer's OS setting)
 - **Self-contained mode:** stores the preview image and icon inside the card as data: URIs, so the card works offline and keeps working if the site deletes its images

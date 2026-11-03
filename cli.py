@@ -19,6 +19,8 @@ def main() -> None:
     parser.add_argument("--size", choices=SIZES, default="large")
     parser.add_argument("--theme", choices=THEMES, default="light")
     parser.add_argument("--width", type=int, help="max card width in px")
+    parser.add_argument("--height", type=int,
+                        help="max height in px (large: whole card, small: card height, player: player height)")
     parser.add_argument("--no-date", action="store_true", help="hide the published date")
     parser.add_argument("--offline", action="store_true",
                         help="embed images as data: URIs so the card works without internet")
@@ -44,7 +46,7 @@ def main() -> None:
     if args.json:
         out = json.dumps(meta.to_dict(), indent=2, ensure_ascii=False)
     else:
-        out = render_card(meta, args.size, args.theme, args.width, not args.no_date)
+        out = render_card(meta, args.size, args.theme, args.width, not args.no_date, args.height)
         if args.page:
             out = render_page(out, args.theme, meta.title)
 

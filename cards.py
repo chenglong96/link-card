@@ -13,6 +13,10 @@ from unfurl import LinkMeta
 SIZES = ("large", "small", "player")
 THEMES = ("light", "dark", "auto")
 DEFAULT_WIDTHS = {"large": 520, "small": 600, "player": 640}
+# Height presets. Large: the whole card (the image is cropped to fit). Small: the
+# card's height (the thumbnail is square). Player: see preset_height().
+DEFAULT_HEIGHTS = {"large": 440, "small": 120}
+HEIGHT_RANGES = {"large": (160, 900), "small": (72, 320), "player": (80, 900)}
 
 _DARK_VARS = ("--lc-bg:#16181c;--lc-fg:#e7e9ea;--lc-muted:#8b98a5;"
               "--lc-border:#2f3336;--lc-hover:#1d1f23;--lc-thumb:#202327")
@@ -27,6 +31,9 @@ CSS = (
     f"@media (prefers-color-scheme:dark){{.lc-auto{{{_DARK_VARS}}}}}"
     ".lc a.lc-link{display:block;color:inherit;text-decoration:none}"
     ".lc a.lc-link:hover{background:var(--lc-hover)}"
+    ".lc-large a.lc-link{display:flex;flex-direction:column;max-height:var(--lc-h,none)}"
+    ".lc-large .lc-media{flex:0 1 auto;min-height:0}"
+    ".lc-large .lc-body{flex:none}"
     ".lc-media{position:relative;aspect-ratio:1.91/1;background:var(--lc-thumb);overflow:hidden}"
     ".lc-media img,.lc-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}"
     ".lc-body{display:flex;flex-direction:column;gap:4px;min-width:0;padding:12px 14px 14px}"
@@ -38,11 +45,11 @@ CSS = (
     ".lc-meta img{width:16px;height:16px;border-radius:3px;flex:none}"
     ".lc-meta span{overflow:hidden;text-overflow:ellipsis}"
     ".lc-meta .lc-date{flex:none}"
-    ".lc-small a.lc-link{display:flex;min-height:104px}"
-    ".lc-small .lc-body{flex:1;justify-content:center}"
+    ".lc-small a.lc-link{display:flex;height:var(--lc-h,120px)}"
+    ".lc-small .lc-body{flex:1;justify-content:safe center;overflow:hidden}"
     ".lc-small .lc-desc{-webkit-line-clamp:2}"
-    ".lc-thumb{position:relative;flex:none;width:clamp(88px,28%,150px);background:var(--lc-thumb);"
-    "border-left:1px solid var(--lc-border)}"
+    ".lc-thumb{position:relative;flex:none;width:min(40%,var(--lc-h,120px));background:var(--lc-thumb);"
+    "border-right:1px solid var(--lc-border)}"
     ".lc-player{position:relative;background:var(--lc-thumb)}"
     ".lc-player.lc-ratio{background:#000}"
     ".lc-player iframe{display:block;width:100%;border:0}"
@@ -52,23 +59,52 @@ CSS = (
 _IFRAME_ALLOW = "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
 
 
+def effective_size(meta: LinkMeta, size: str) -> str:
+    """'player' falls back to 'large' for links with no embeddable player."""
+    return "large" if size == "player" and not meta.has_player else size
+
+
+def preset_height(meta: LinkMeta, size: str, width: int | None = None) -> int:
+    """Default height for a size. For players it's the provider's own size:
+    a fixed height (Spotify, SoundCloud) or the video's height at `width`."""
+    size = effective_size(meta, size)
+    if size != "player":
+        return DEFAULT_HEIGHTS[size]
+    if meta.player_ratio:
+        return round((width or DEFAULT_WIDTHS["player"]) * meta.player_ratio)
+    return meta.player_height or 400
+
+
 def render_card(meta: LinkMeta, size: str = "large", theme: str = "light",
-                max_width: int | None = None, show_date: bool = True) -> str:
+                max_width: int | None = None, show_date: bool = True,
+                max_height: int | None = None) -> str:
     """Embed-code HTML for one card. Falls back to 'large' if 'player' was
-    requested for a link that has no embeddable player."""
+    requested for a link that has no embeddable player.
+
+    max_height: large - the whole card (the image is cropped to fit); small -
+    the card's height; player - the player's height (a video keeps its shape,
+    so the card narrows instead). Ignored for X / TikTok / Reddit embeds."""
     if size not in SIZES:
         raise ValueError(f"size must be one of {SIZES}")
     if theme not in THEMES:
         raise ValueError(f"theme must be one of {THEMES}")
-    if size == "player" and not meta.has_player:
-        size = "large"
+    size = effective_size(meta, size)
     width = max_width or DEFAULT_WIDTHS[size]
 
     if size == "player" and meta.player_html:
         return _provider_embed(meta, theme, width)
-    body = {"large": _large, "small": _small, "player": _player}[size](meta, show_date)
+    style = f"max-width:{width}px"
+    if size == "player":
+        height = max_height or preset_height(meta, size, width)
+        if meta.player_ratio:  # fit the video inside width x height
+            style = f"max-width:{min(width, round(height / meta.player_ratio))}px"
+        body = _player(meta, show_date, height)
+    else:
+        if max_height:
+            style += f";--lc-h:{max_height}px"
+        body = (_large if size == "large" else _small)(meta, show_date)
     return (f"<style>{CSS}</style>\n"
-            f'<div class="lc lc-{size} lc-{theme}" style="max-width:{width}px">{body}</div>')
+            f'<div class="lc lc-{size} lc-{theme}" style="{style}">{body}</div>')
 
 
 def render_page(card_html: str, theme: str = "light", title: str = "Link card") -> str:
@@ -103,17 +139,16 @@ def _small(meta: LinkMeta, show_date: bool) -> str:
     image = _safe_url(meta.image)
     thumb = (f'<div class="lc-thumb"><img src="{image}" alt="" onerror="this.parentNode.remove()"></div>'
              if image else "")
-    return f"{_open_link(meta)}{_text(meta, show_date)}{thumb}</a>"
+    return f"{_open_link(meta)}{thumb}{_text(meta, show_date)}</a>"
 
 
-def _player(meta: LinkMeta, show_date: bool) -> str:
+def _player(meta: LinkMeta, show_date: bool, height: int) -> str:
     src = _safe_url(meta.player_url)
     frame = f'<iframe src="{src}" title="{escape(meta.title)}" allow="{_IFRAME_ALLOW}" allowfullscreen'
     if meta.player_ratio:
         player = (f'<div class="lc-player lc-ratio" style="aspect-ratio:{1 / meta.player_ratio:.4f}">'
                   f"{frame}></iframe></div>")
     else:
-        height = meta.player_height or 400
         player = f'<div class="lc-player">{frame} height="{height}"></iframe></div>'
     return f"{player}{_open_link(meta)}{_text(meta, show_date, with_desc=False)}</a>"
 
