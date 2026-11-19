@@ -74,7 +74,8 @@ class LinkMeta:
     player_ratio: float = 0.0  # height / width, for responsive video players
     player_height: int = 0     # fixed height, for audio and other rich players
     player_html: str = ""      # provider HTML, only for trusted script embeds
-    source: str = ""           # which strategies produced the data
+    duration: int = 0          # length of a video / track in seconds, when known
+    source: str = ""         # which strategies produced the data
     warning: str = ""          # set when the page could not be read (e.g. bot protection)
 
     @property
@@ -137,6 +138,8 @@ def unfurl(url: str) -> LinkMeta:
             soup = BeautifulSoup(body, "lxml", from_encoding=encoding)
             _apply_html(meta, soup, final_url)
             sources.append("html")
+            if _is_youtube(final_url) and _apply_youtube(meta, body):
+                sources.append("youtube")
             if not known and not meta.has_player:
                 link = soup.find("link", type="application/json+oembed", href=True)
                 if link and _try_oembed(meta, urljoin(final_url, link["href"]), trusted=False):
@@ -282,6 +285,7 @@ def _apply_oembed(meta: LinkMeta, data: dict, trusted: bool) -> None:
     _fill(meta, "author", author)
     _fill(meta, "site_name", provider)
     _fill(meta, "published", _parse_date(data.get("upload_date")))  # Vimeo and others
+    _fill(meta, "duration", _to_int(data.get("duration")))  # Vimeo and others
     image = data.get("thumbnail_url") or (data.get("url") if data.get("type") == "photo" else "")
     _fill(meta, "image", _abs_url(image, meta.url))
 
@@ -310,6 +314,37 @@ def _apply_oembed(meta: LinkMeta, data: dict, trusted: bool) -> None:
         meta.player_ratio = height / width
     else:
         meta.player_height = height or 400
+
+
+# --- YouTube ----------------------------------------------------------------
+
+MAX_DESCRIPTION = 5000  # full video descriptions; other pages are cut to 300
+
+
+def _is_youtube(url: str) -> bool:
+    host = (urlparse(url).hostname or "").removeprefix("www.").removeprefix("m.")
+    return host in ("youtube.com", "youtu.be", "music.youtube.com")
+
+
+def _apply_youtube(meta: LinkMeta, body: bytes) -> bool:
+    """The watch page's og:description stops after ~160 characters; the full
+    description and the length are in its embedded player data."""
+    text = body.decode("utf-8", "replace")
+    found = False
+    match = re.search(r'"shortDescription":("(?:[^"\\]|\\.)*")', text)
+    if match:
+        try:
+            description = _clean_paragraphs(json.loads(match.group(1)), MAX_DESCRIPTION)
+        except ValueError:
+            description = ""
+        if description:
+            meta.description = description
+            found = True
+    match = re.search(r'"lengthSeconds":"(\d+)"', text)
+    if match:
+        _fill(meta, "duration", int(match.group(1)))
+        found = True
+    return found
 
 
 # --- HTML meta tags ---------------------------------------------------------
@@ -448,6 +483,15 @@ def _clean(value, limit: int = 0) -> str:
     if "<" in text or "&" in text:  # some sites put HTML in their descriptions
         text = html.unescape(re.sub(r"<[^>]+>", " ", text))
     text = re.sub(r"\s+", " ", text).strip()
+    if limit and len(text) > limit:
+        text = text[: limit - 1].rsplit(" ", 1)[0] + "…"
+    return text
+
+
+def _clean_paragraphs(value, limit: int = 0) -> str:
+    """Like _clean, but keeps line breaks (at most one blank line in a row)."""
+    lines = [re.sub(r"[ \t\f\v]+", " ", line).strip() for line in str(value or "").splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if limit and len(text) > limit:
         text = text[: limit - 1].rsplit(" ", 1)[0] + "…"
     return text

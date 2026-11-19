@@ -5,8 +5,11 @@ pasted into any web page, CMS, or saved as a file - no server needed to view it.
 """
 from __future__ import annotations
 
+import dataclasses
+import re
 from datetime import date
 from html import escape
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from unfurl import LinkMeta
 
@@ -77,13 +80,16 @@ def preset_height(meta: LinkMeta, size: str, width: int | None = None) -> int:
 
 def render_card(meta: LinkMeta, size: str = "large", theme: str = "light",
                 max_width: int | None = None, show_date: bool = True,
-                max_height: int | None = None) -> str:
+                max_height: int | None = None, show_desc: bool = True) -> str:
     """Embed-code HTML for one card. Falls back to 'large' if 'player' was
     requested for a link that has no embeddable player.
 
     max_height: large - the whole card (the image is cropped to fit); small -
     the card's height; player - the player's height (a video keeps its shape,
-    so the card narrows instead). Ignored for X / TikTok / Reddit embeds."""
+    so the card narrows instead). Ignored for X / TikTok / Reddit embeds.
+    To play only part of a video, pass the result of clip_player() as meta."""
+    if not show_desc:
+        meta = dataclasses.replace(meta, description="")
     if size not in SIZES:
         raise ValueError(f"size must be one of {SIZES}")
     if theme not in THEMES:
@@ -150,7 +156,7 @@ def _player(meta: LinkMeta, show_date: bool, height: int) -> str:
                   f"{frame}></iframe></div>")
     else:
         player = f'<div class="lc-player">{frame} height="{height}"></iframe></div>'
-    return f"{player}{_open_link(meta)}{_text(meta, show_date, with_desc=False)}</a>"
+    return f"{player}{_open_link(meta)}{_text(meta, show_date)}</a>"
 
 
 def _provider_embed(meta: LinkMeta, theme: str, width: int) -> str:
@@ -165,10 +171,10 @@ def _open_link(meta: LinkMeta) -> str:
     return f'<a class="lc-link" href="{_safe_url(meta.url)}" target="_blank" rel="noopener">'
 
 
-def _text(meta: LinkMeta, show_date: bool, with_desc: bool = True) -> str:
+def _text(meta: LinkMeta, show_date: bool) -> str:
     parts = [f'<div class="lc-title">{escape(meta.title)}</div>']
-    if with_desc and meta.description:
-        parts.append(f'<div class="lc-desc">{escape(meta.description)}</div>')
+    if meta.description:
+        parts.append(f'<div class="lc-desc">{escape(_card_description(meta.description))}</div>')
     parts.append(_footer(meta, show_date))
     return f'<div class="lc-body">{"".join(parts)}</div>'
 
@@ -186,6 +192,15 @@ def _footer(meta: LinkMeta, show_date: bool) -> str:
     return f'<div class="lc-meta">{icon}<span>{escape(label)}</span>{published}</div>'
 
 
+def _card_description(text: str, limit: int = 400) -> str:
+    """The card shows at most 3 lines, so one paragraph of ~400 characters is
+    plenty; this keeps a long video description out of the embed code."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rsplit(" ", 1)[0] + "…"
+    return text
+
+
 def _format_date(iso: str) -> str:
     """'2024-03-05' -> '5 Mar 2024' (unambiguous in every locale)."""
     try:
@@ -198,3 +213,102 @@ def _format_date(iso: str) -> str:
 def _safe_url(url: str) -> str:
     """Only http(s) links and data: images may reach an href/src."""
     return escape(url) if url.startswith(("https://", "http://", "data:image/")) else ""
+
+
+# --- clips: play only part of a video ---------------------------------------
+
+_YOUTUBE_EMBED_HOSTS = ("youtube.com", "youtube-nocookie.com")
+
+
+def parse_time(text: str) -> int | None:
+    """'3:16', '3m16s', '1:02:03', '1h2m3s', '196' or '196s' -> seconds.
+    '' -> None. Raises ValueError for anything else."""
+    text = (text or "").strip().lower()
+    if not text:
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?s?", text):
+        return int(float(text.rstrip("s")))
+    if re.fullmatch(r"\d+(:\d{1,2}){1,2}", text):
+        first, *rest = (int(p) for p in text.split(":"))
+        if any(p > 59 for p in rest):
+            raise ValueError(f"'{text}' isn't a valid time: minutes and seconds go up to 59.")
+        seconds = first
+        for part in rest:
+            seconds = seconds * 60 + part
+        return seconds
+    match = re.fullmatch(r"(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?", text)
+    if match and any(match.groups()):
+        h, m, s = (int(g or 0) for g in match.groups())
+        return h * 3600 + m * 60 + s
+    raise ValueError(f"Can't read the time '{text}'. Use a form like 3:16, 3m16s or 196.")
+
+
+def format_time(seconds: int) -> str:
+    """196 -> '3:16', 3723 -> '1:02:03'."""
+    h, rest = divmod(int(seconds), 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
+
+
+def clip_support(meta: LinkMeta) -> str:
+    """What part-of-a-video options the player accepts: 'start-end' (YouTube),
+    'start' (Vimeo), or '' (none)."""
+    host = (urlparse(meta.player_url).hostname or "").removeprefix("www.")
+    if host in _YOUTUBE_EMBED_HOSTS and "/embed/" in meta.player_url:
+        return "start-end"
+    if host == "player.vimeo.com":
+        return "start"
+    return ""
+
+
+def start_time_from_url(url: str) -> int | None:
+    """The start time a shared link asks for: YouTube ?t=1m30s / ?start=90,
+    or Vimeo #t=90s."""
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query))
+    fragment = dict(parse_qsl(parsed.fragment))
+    for value in (params.get("t"), params.get("start"), fragment.get("t")):
+        if value:
+            try:
+                return parse_time(value) or None
+            except ValueError:
+                pass
+    return None
+
+
+def clip_player(meta: LinkMeta, start: int | None, end: int | None) -> LinkMeta:
+    """A copy whose player plays only start..end (seconds; None = from the
+    beginning / to the end), replacing any start time the link already had.
+    The card's link also opens the video at `start`.
+    Raises ValueError if the player can't do it or the times don't make sense."""
+    support = clip_support(meta)
+    if not support:
+        if start or end:
+            raise ValueError("This player can't be set to start or stop at a chosen time "
+                             "(only YouTube and Vimeo can).")
+        return meta
+    if end is not None and support != "start-end":
+        raise ValueError("Vimeo players can start at a chosen time but can't stop early; "
+                         "leave the end time empty.")
+    start = start or None
+    if end is not None and end <= (start or 0):
+        raise ValueError("The end time must be after the start time.")
+    if meta.duration:
+        if start is not None and start >= meta.duration:
+            raise ValueError(f"The start time is past the end of the video ({format_time(meta.duration)}).")
+        if end is not None and end >= meta.duration:
+            end = None  # "to the end" - the same thing, and avoids an off-by-one stop
+
+    player, link = urlparse(meta.player_url), urlparse(meta.url)
+    if support == "start-end":
+        query = [(k, v) for k, v in parse_qsl(player.query) if k not in ("start", "end", "t")]
+        query += [(k, str(v)) for k, v in (("start", start), ("end", end)) if v is not None]
+        player = player._replace(query=urlencode(query))
+        link_query = [(k, v) for k, v in parse_qsl(link.query) if k not in ("t", "start")]
+        if start is not None:
+            link_query.append(("t", f"{start}s"))
+        link = link._replace(query=urlencode(link_query))
+    else:  # Vimeo reads the start time from the fragment
+        fragment = f"t={start}s" if start is not None else ""
+        player, link = player._replace(fragment=fragment), link._replace(fragment=fragment)
+    return dataclasses.replace(meta, player_url=urlunparse(player), url=urlunparse(link))
